@@ -1,4 +1,4 @@
-/// <summary>
+﻿/// <summary>
 /// 类说明：HttpHelper类，用来实现Http访问，Post或者Get方式的，直接访问，带Cookie的，带证书的等方式，可以设置代理
 /// 重要提示：请不要自行修改本类，如果因为你自己修改后将无法升级到新版本。如果确实有什么问题请到官方网站提建议，
 /// 我们一定会及时修改
@@ -6,8 +6,8 @@
 /// 编 码 人：苏飞
 /// 联系方式：361983679  
 /// 官方网址：http://www.sufeinet.com/thread-3-1-1.html
-/// 修改日期：2013-11-04
-/// 版 本 号：1.4.3
+/// 修改日期：2016-05-05
+/// 版 本 号：1.6
 /// </summary>
 using System;
 using System.Collections.Generic;
@@ -18,6 +18,8 @@ using System.Text.RegularExpressions;
 using System.IO.Compression;
 using System.Security.Cryptography.X509Certificates;
 using System.Net.Security;
+using System.Linq;
+using System.Net.Cache;
 
 namespace DotNet4.Utilities
 {
@@ -26,7 +28,7 @@ namespace DotNet4.Utilities
     /// </summary>
     public class HttpHelper
     {
-        #region 预定义方法或者变更
+        #region 预定义方变量
         //默认的编码
         private Encoding encoding = Encoding.Default;
         //Post数据编码
@@ -35,6 +37,12 @@ namespace DotNet4.Utilities
         private HttpWebRequest request = null;
         //获取影响流的数据对象
         private HttpWebResponse response = null;
+        //设置本地的出口ip和端口
+        private IPEndPoint _IPEndPoint = null;
+        #endregion
+
+        #region Public
+
         /// <summary>
         /// 根据相传入的数据，得到相应页面数据
         /// </summary>
@@ -51,83 +59,29 @@ namespace DotNet4.Utilities
             }
             catch (Exception ex)
             {
+                //配置参数时出错
                 return new HttpResult() { Cookie = string.Empty, Header = null, Html = ex.Message, StatusDescription = "配置参数时出错：" + ex.Message };
             }
             try
             {
-                #region 得到请求的response
+                //请求数据
                 using (response = (HttpWebResponse)request.GetResponse())
                 {
-                    result.StatusCode = response.StatusCode;
-                    result.StatusDescription = response.StatusDescription;
-                    result.Header = response.Headers;
-                    if (response.Cookies != null) result.CookieCollection = response.Cookies;
-                    if (response.Headers["set-cookie"] != null) result.Cookie = response.Headers["set-cookie"];
-                    byte[] ResponseByte = null;
-                    using (MemoryStream _stream = new MemoryStream())
-                    {
-                        //GZIIP处理
-                        if (response.ContentEncoding != null && response.ContentEncoding.Equals("gzip", StringComparison.InvariantCultureIgnoreCase))
-                        {
-                            //开始读取流并设置编码方式
-                            new GZipStream(response.GetResponseStream(), CompressionMode.Decompress).CopyTo(_stream, 10240);
-                        }
-                        else
-                        {
-                            //开始读取流并设置编码方式
-                            response.GetResponseStream().CopyTo(_stream, 10240);
-                        }
-                        //获取Byte
-                        ResponseByte = _stream.ToArray();
-                    }
-                    if (ResponseByte != null & ResponseByte.Length > 0)
-                    {
-                        //是否返回Byte类型数据
-                        if (item.ResultType == ResultType.Byte) result.ResultByte = ResponseByte;
-                        //从这里开始我们要无视编码了
-                        if (encoding == null)
-                        {
-                            Match meta = Regex.Match(Encoding.Default.GetString(ResponseByte), "<meta([^<]*)charset=([^<]*)[\"']", RegexOptions.IgnoreCase);
-                            string c = (meta.Groups.Count > 1) ? meta.Groups[2].Value.ToLower().Trim() : string.Empty;
-                            if (c.Length > 2)
-                            {
-                                try
-                                {
-                                    if (c.IndexOf(" ") > 0) c = c.Substring(0, c.IndexOf(" "));
-                                    encoding = Encoding.GetEncoding(c.Replace("\"", "").Replace("'", "").Replace(";", "").Replace("iso-8859-1", "gbk").Trim());
-                                }
-                                catch
-                                {
-                                    if (string.IsNullOrEmpty(response.CharacterSet)) encoding = Encoding.UTF8;
-                                    else encoding = Encoding.GetEncoding(response.CharacterSet);
-                                }
-                            }
-                            else
-                            {
-                                if (string.IsNullOrEmpty(response.CharacterSet)) encoding = Encoding.UTF8;
-                                else encoding = Encoding.GetEncoding(response.CharacterSet);
-                            }
-                        }
-                        //得到返回的HTML
-                        result.Html = encoding.GetString(ResponseByte);
-                    }
-                    else
-                    {
-                        //得到返回的HTML
-                        result.Html = "本次请求并未返回任何数据";
-                    }
+                    GetData(item, result);
                 }
-                #endregion
             }
             catch (WebException ex)
             {
-                //这里是在发生异常时返回的错误信息
-                response = (HttpWebResponse)ex.Response;
-                result.Html = ex.Message;
-                if (response != null)
+                if (ex.Response != null)
                 {
-                    result.StatusCode = response.StatusCode;
-                    result.StatusDescription = response.StatusDescription;
+                    using (response = (HttpWebResponse)ex.Response)
+                    {
+                        GetData(item, result);
+                    }
+                }
+                else
+                {
+                    result.Html = ex.Message;
                 }
             }
             catch (Exception ex)
@@ -137,14 +91,152 @@ namespace DotNet4.Utilities
             if (item.IsToLower) result.Html = result.Html.ToLower();
             return result;
         }
+        #endregion
+
+        #region GetData
+
+        /// <summary>
+        /// 获取数据的并解析的方法
+        /// </summary>
+        /// <param name="item"></param>
+        /// <param name="result"></param>
+        private void GetData(HttpItem item, HttpResult result)
+        {
+            if (response == null)
+            {
+                return;
+            }
+            #region base
+            //获取StatusCode
+            result.StatusCode = response.StatusCode;
+            //获取StatusDescription
+            result.StatusDescription = response.StatusDescription;
+            //获取Headers
+            result.Header = response.Headers;
+            //获取最后访问的URl
+            result.ResponseUri = response.ResponseUri.ToString();
+            //获取CookieCollection
+            if (response.Cookies != null) result.CookieCollection = response.Cookies;
+            //获取set-cookie
+            if (response.Headers["set-cookie"] != null) result.Cookie = response.Headers["set-cookie"];
+            #endregion
+
+            #region byte
+            //处理网页Byte
+            byte[] ResponseByte = GetByte();
+            #endregion
+
+            #region Html
+            if (ResponseByte != null && ResponseByte.Length > 0)
+            {
+                //设置编码
+                SetEncoding(item, result, ResponseByte);
+                //得到返回的HTML
+                result.Html = encoding.GetString(ResponseByte);
+            }
+            else
+            {
+                //没有返回任何Html代码
+                result.Html = string.Empty;
+            }
+            #endregion
+        }
+        /// <summary>
+        /// 设置编码
+        /// </summary>
+        /// <param name="item">HttpItem</param>
+        /// <param name="result">HttpResult</param>
+        /// <param name="ResponseByte">byte[]</param>
+        private void SetEncoding(HttpItem item, HttpResult result, byte[] ResponseByte)
+        {
+            //是否返回Byte类型数据
+            if (item.ResultType == ResultType.Byte) result.ResultByte = ResponseByte;
+            //从这里开始我们要无视编码了
+            if (encoding == null)
+            {
+                Match meta = Regex.Match(Encoding.Default.GetString(ResponseByte), "<meta[^<]*charset=([^<]*)[\"']", RegexOptions.IgnoreCase);
+                string c = string.Empty;
+                if (meta != null && meta.Groups.Count > 0)
+                {
+                    c = meta.Groups[1].Value.ToLower().Trim();
+                }
+                if (c.Length > 2)
+                {
+                    try
+                    {
+                        encoding = Encoding.GetEncoding(c.Replace("\"", string.Empty).Replace("'", "").Replace(";", "").Replace("iso-8859-1", "gbk").Trim());
+                    }
+                    catch
+                    {
+                        if (string.IsNullOrEmpty(response.CharacterSet))
+                        {
+                            encoding = Encoding.UTF8;
+                        }
+                        else
+                        {
+                            encoding = Encoding.GetEncoding(response.CharacterSet);
+                        }
+                    }
+                }
+                else
+                {
+                    if (string.IsNullOrEmpty(response.CharacterSet))
+                    {
+                        encoding = Encoding.UTF8;
+                    }
+                    else
+                    {
+                        encoding = Encoding.GetEncoding(response.CharacterSet);
+                    }
+                }
+            }
+        }
+        /// <summary>
+        /// 提取网页Byte
+        /// </summary>
+        /// <returns></returns>
+        private byte[] GetByte()
+        {
+            byte[] ResponseByte = null;
+            using (MemoryStream _stream = new MemoryStream())
+            {
+                //GZIIP处理
+                if (response.ContentEncoding != null && response.ContentEncoding.Equals("gzip", StringComparison.InvariantCultureIgnoreCase))
+                {
+                    //开始读取流并设置编码方式
+                    new GZipStream(response.GetResponseStream(), CompressionMode.Decompress).CopyTo(_stream, 10240);
+                }
+                else
+                {
+                    //开始读取流并设置编码方式
+                    response.GetResponseStream().CopyTo(_stream, 10240);
+                }
+                //获取Byte
+                ResponseByte = _stream.ToArray();
+            }
+            return ResponseByte;
+        }
+
+
+        #endregion
+
+        #region SetRequest
+
         /// <summary>
         /// 为请求准备参数
         /// </summary>
         ///<param name="item">参数列表</param>
         private void SetRequest(HttpItem item)
         {
+
             // 验证证书
             SetCer(item);
+            if (item.IPEndPoint != null)
+            {
+                _IPEndPoint = item.IPEndPoint;
+                //设置本地的出口ip和端口
+                request.ServicePoint.BindIPEndPointDelegate = new BindIPEndPoint(BindIPEndPointCallback);
+            }
             //设置Header参数
             if (item.Header != null && item.Header.Count > 0) foreach (string key in item.Header.AllKeys)
                 {
@@ -163,6 +255,7 @@ namespace DotNet4.Utilities
             {
                 request.Host = item.Host;
             }
+            if (item.IfModifiedSince != null) request.IfModifiedSince = Convert.ToDateTime(item.IfModifiedSince);
             //Accept
             request.Accept = item.Accept;
             //ContentType返回类型
@@ -171,12 +264,18 @@ namespace DotNet4.Utilities
             request.UserAgent = item.UserAgent;
             // 编码
             encoding = item.Encoding;
+            //设置安全凭证
+            request.Credentials = item.ICredentials;
             //设置Cookie
             SetCookie(item);
             //来源地址
             request.Referer = item.Referer;
             //是否执行跳转功能
             request.AllowAutoRedirect = item.Allowautoredirect;
+            if (item.MaximumAutomaticRedirections > 0)
+            {
+                request.MaximumAutomaticRedirections = item.MaximumAutomaticRedirections;
+            }
             //设置Post数据
             SetPostData(item);
             //设置最大连接
@@ -225,13 +324,9 @@ namespace DotNet4.Utilities
         /// <param name="item">Http参数</param>
         private void SetCookie(HttpItem item)
         {
-            //Cookie
-            if (item.ResultCookieType == ResultCookieType.String)
-            {
-                if (!string.IsNullOrEmpty(item.Cookie)) request.Headers[HttpRequestHeader.Cookie] = item.Cookie;
-            }
+            if (!string.IsNullOrEmpty(item.Cookie)) request.Headers[HttpRequestHeader.Cookie] = item.Cookie;
             //设置CookieCollection
-            else if (item.ResultCookieType == ResultCookieType.CookieCollection)
+            if (item.ResultCookieType == ResultCookieType.CookieCollection)
             {
                 request.CookieContainer = new CookieContainer();
                 if (item.CookieCollection != null && item.CookieCollection.Count > 0)
@@ -245,7 +340,7 @@ namespace DotNet4.Utilities
         private void SetPostData(HttpItem item)
         {
             //验证在得到结果时是否有传入数据
-            if (request.Method.Trim().ToLower().Contains("post"))
+            if (!request.Method.Trim().ToLower().Contains("get"))
             {
                 if (item.PostEncoding != null)
                 {
@@ -281,7 +376,12 @@ namespace DotNet4.Utilities
         /// <param name="item">参数对象</param>
         private void SetProxy(HttpItem item)
         {
+            bool isIeProxy = false;
             if (!string.IsNullOrWhiteSpace(item.ProxyIp))
+            {
+                isIeProxy = item.ProxyIp.ToLower().Contains("ieproxy");
+            }
+            if (!string.IsNullOrWhiteSpace(item.ProxyIp) && !isIeProxy)
             {
                 //设置代理服务器
                 if (item.ProxyIp.Contains(":"))
@@ -301,13 +401,21 @@ namespace DotNet4.Utilities
                     //给当前请求对象
                     request.Proxy = myProxy;
                 }
-                request.Credentials = CredentialCache.DefaultCredentials;
             }
-            else if (item.WebProxy != null)
+            else if (isIeProxy)
+            {
+                //设置为IE代理
+            }
+            else
             {
                 request.Proxy = item.WebProxy;
             }
         }
+
+
+        #endregion
+
+        #region private main
         /// <summary>
         /// 回调验证证书问题
         /// </summary>
@@ -316,9 +424,23 @@ namespace DotNet4.Utilities
         /// <param name="chain">X509Chain</param>
         /// <param name="errors">SslPolicyErrors</param>
         /// <returns>bool</returns>
-        public bool CheckValidationResult(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) { return true; }
+        private bool CheckValidationResult(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) { return true; }
+
+        /// <summary>
+        /// 通过设置这个属性，可以在发出连接的时候绑定客户端发出连接所使用的IP地址。 
+        /// </summary>
+        /// <param name="servicePoint"></param>
+        /// <param name="remoteEndPoint"></param>
+        /// <param name="retryCount"></param>
+        /// <returns></returns>
+        private IPEndPoint BindIPEndPointCallback(ServicePoint servicePoint, IPEndPoint remoteEndPoint, int retryCount)
+        {
+            return _IPEndPoint;//端口号
+        }
         #endregion
     }
+
+    #region public calss
     /// <summary>
     /// Http请求参考类
     /// </summary>
@@ -433,7 +555,7 @@ namespace DotNet4.Utilities
         /// </summary>
         public string CerPath { get; set; }
         /// <summary>
-        /// 设置代理对象
+        /// 设置代理对象，不想使用IE默认配置就设置为Null，而且不要设置ProxyIp
         /// </summary>
         public WebProxy WebProxy { get; set; }
         private Boolean isToLower = false;
@@ -472,7 +594,7 @@ namespace DotNet4.Utilities
         /// </summary>
         public string ProxyPwd { get; set; }
         /// <summary>
-        /// 代理 服务IP
+        /// 代理 服务IP,如果要使用IE代理就设置为ieproxy
         /// </summary>
         public string ProxyIp { get; set; }
         private ResultType resulttype = ResultType.String;
@@ -523,6 +645,42 @@ namespace DotNet4.Utilities
             get { return _ResultCookieType; }
             set { _ResultCookieType = value; }
         }
+        private ICredentials _ICredentials = CredentialCache.DefaultCredentials;
+        /// <summary>
+        /// 获取或设置请求的身份验证信息。
+        /// </summary>
+        public ICredentials ICredentials
+        {
+            get { return _ICredentials; }
+            set { _ICredentials = value; }
+        }
+        /// <summary>
+        /// 设置请求将跟随的重定向的最大数目
+        /// </summary>
+        public int MaximumAutomaticRedirections { get; set; }
+        private DateTime? _IfModifiedSince = null;
+        /// <summary>
+        /// 获取和设置IfModifiedSince，默认为当前日期和时间
+        /// </summary>
+        public DateTime? IfModifiedSince
+        {
+            get { return _IfModifiedSince; }
+            set { _IfModifiedSince = value; }
+        }
+        #region ip-port
+        private IPEndPoint _IPEndPoint = null;
+        /// <summary>
+        /// 设置本地的出口ip和端口
+        /// </summary>]
+        /// <example>
+        ///item.IPEndPoint = new IPEndPoint(IPAddress.Parse("192.168.1.1"),80);
+        /// </example>
+        public IPEndPoint IPEndPoint
+        {
+            get { return _IPEndPoint; }
+            set { _IPEndPoint = value; }
+        }
+        #endregion
     }
     /// <summary>
     /// Http返回参数类
@@ -537,10 +695,15 @@ namespace DotNet4.Utilities
         /// Cookie对象集合
         /// </summary>
         public CookieCollection CookieCollection { get; set; }
+        private string _html = string.Empty;
         /// <summary>
         /// 返回的String类型数据 只有ResultType.String时才返回数据，其它情况为空
         /// </summary>
-        public string Html { get; set; }
+        public string Html
+        {
+            get { return _html; }
+            set { _html = value; }
+        }
         /// <summary>
         /// 返回的Byte数组 只有ResultType.Byte时才返回数据，其它情况为空
         /// </summary>
@@ -557,6 +720,41 @@ namespace DotNet4.Utilities
         /// 返回状态码,默认为OK
         /// </summary>
         public HttpStatusCode StatusCode { get; set; }
+        /// <summary>
+        /// 最后访问的URl
+        /// </summary>
+        public string ResponseUri { get; set; }
+        /// <summary>
+        /// 获取重定向的URl
+        /// </summary>
+        public string RedirectUrl
+        {
+            get
+            {
+                try
+                {
+                    if (Header != null && Header.Count > 0)
+                    {
+                        if (Header.AllKeys.Any(k => k.ToLower().Contains("location")))
+                        {
+                            string locationurl = Header["location"].ToString().ToLower();
+
+                            if (!string.IsNullOrWhiteSpace(locationurl))
+                            {
+                                bool b = locationurl.StartsWith("http://") || locationurl.StartsWith("https://");
+                                if (!b)
+                                {
+                                    locationurl = new Uri(new Uri(ResponseUri), locationurl).AbsoluteUri;
+                                }
+                            }
+                            return locationurl;
+                        }
+                    }
+                }
+                catch { }
+                return string.Empty;
+            }
+        }
     }
     /// <summary>
     /// 返回类型
@@ -604,4 +802,5 @@ namespace DotNet4.Utilities
         /// </summary>
         CookieCollection
     }
+    #endregion
 }
