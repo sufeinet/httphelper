@@ -6,8 +6,8 @@
 /// 编 码 人：苏飞
 /// 联系方式：361983679  
 /// 官方网址：http://www.sufeinet.com/thread-3-1-1.html
-/// 修改日期：2016-05-05
-/// 版 本 号：1.6
+/// 修改日期：2017-09-30
+/// 版 本 号：1.9
 /// </summary>
 using System;
 using System.Collections.Generic;
@@ -21,7 +21,7 @@ using System.Net.Security;
 using System.Linq;
 using System.Net.Cache;
 
-namespace DotNet4.Utilities
+namespace SufeiUtil
 {
     /// <summary>
     /// Http连接操作帮助类
@@ -89,6 +89,12 @@ namespace DotNet4.Utilities
                 result.Html = ex.Message;
             }
             if (item.IsToLower) result.Html = result.Html.ToLower();
+            //重置request，response为空
+            if (item.IsReset)
+            {
+                request = null;
+                response = null;
+            }
             return result;
         }
         #endregion
@@ -122,8 +128,10 @@ namespace DotNet4.Utilities
             #endregion
 
             #region byte
+
             //处理网页Byte
             byte[] ResponseByte = GetByte();
+
             #endregion
 
             #region Html
@@ -367,6 +375,10 @@ namespace DotNet4.Utilities
                 {
                     request.ContentLength = buffer.Length;
                     request.GetRequestStream().Write(buffer, 0, buffer.Length);
+                }
+                else
+                {
+                    request.ContentLength = 0;
                 }
             }
         }
@@ -619,7 +631,7 @@ namespace DotNet4.Utilities
         //     获取或设置用于请求的 HTTP 版本。返回结果:用于请求的 HTTP 版本。默认为 System.Net.HttpVersion.Version11。
         /// </summary>
         public Version ProtocolVersion { get; set; }
-        private Boolean _expect100continue = true;
+        private Boolean _expect100continue = false;
         /// <summary>
         ///  获取或设置一个 System.Boolean 值，该值确定是否使用 100-Continue 行为。如果 POST 请求需要 100-Continue 响应，则为 true；否则为 false。默认值为 true。
         /// </summary>
@@ -681,6 +693,16 @@ namespace DotNet4.Utilities
             set { _IPEndPoint = value; }
         }
         #endregion
+
+        private bool _isReset = false;
+        /// <summary>
+        /// 是否重置request,response的值，默认不重置，当设置为True时request,response将被设置为Null
+        /// </summary>
+        public bool IsReset
+        {
+            get { return _isReset; }
+            set { _isReset = value; }
+        }
     }
     /// <summary>
     /// Http返回参数类
@@ -737,17 +759,17 @@ namespace DotNet4.Utilities
                     {
                         if (Header.AllKeys.Any(k => k.ToLower().Contains("location")))
                         {
-                            string locationurl = Header["location"].ToString().ToLower();
-
+                            string baseurl = Header["location"].ToString().Trim();
+                            string locationurl = baseurl.ToLower();
                             if (!string.IsNullOrWhiteSpace(locationurl))
                             {
                                 bool b = locationurl.StartsWith("http://") || locationurl.StartsWith("https://");
                                 if (!b)
                                 {
-                                    locationurl = new Uri(new Uri(ResponseUri), locationurl).AbsoluteUri;
+                                    baseurl = new Uri(new Uri(ResponseUri), baseurl).AbsoluteUri;
                                 }
                             }
-                            return locationurl;
+                            return baseurl;
                         }
                     }
                 }
