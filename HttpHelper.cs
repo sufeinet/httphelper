@@ -6,8 +6,8 @@
 /// 编 码 人：苏飞
 /// 联系方式：361983679  
 /// 官方网址：http://www.sufeinet.com/thread-3-1-1.html
-/// 修改日期：2017-09-30
-/// 版 本 号：1.9
+/// 修改日期：2018-11-06
+/// 版 本 号：1.9.9
 /// </summary>
 using System;
 using System.Collections.Generic;
